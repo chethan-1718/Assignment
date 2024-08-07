@@ -1,31 +1,66 @@
-from flask import Flask, request, redirect, render_template
-import random
-import string
+from flask import Flask, request, render_template, redirect, url_for
+from cryptography.fernet import Fernet
+import uuid
 
 app = Flask(__name__)
 
-url_mapping = {}
+# In-memory store for snippets
+snippets = {}
+# This key will be used for encryption and decryption
+KEY = Fernet.generate_key()
+cipher = Fernet(KEY)
 
-def generate_short_url(length=6):             
-    characters = string.ascii_letters + string.digits         # Generate a random string of fixed length
-    return ''.join(random.choice(characters) for _ in range(length))
+# Printing the key in console/terminal to check the key 
+print(f"Secret Key: {KEY.decode()}")
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
+def encrypt(text):
+    return cipher.encrypt(text.encode()).decode()  #encrypts the code
+
+def decrypt(encrypted_text, key):
+    cipher = Fernet(key)
+    return cipher.decrypt(encrypted_text.encode()).decode()
+
+@app.route('/', methods=['GET', 'POST'])    
+def create_snippet():
     if request.method == 'POST':
-        original_url = request.form['original_url'] #return the original url
-        short_url = generate_short_url()            #generates a short url
-        url_mapping[short_url] = original_url
-        return render_template('result.html', short_url=short_url) 
-    
-    return render_template('index.html')
+        text = request.form['text']
+        secret_key = request.form.get('secretKey', '')
 
-@app.route('/<short_url>')
-def redirect_to_original(short_url):
-    original_url = url_mapping.get(short_url)
-    if original_url:
-        return redirect(original_url)
-    return 'URL not found', 404
+        snippet_id = str(uuid.uuid4())
+        if secret_key == KEY.decode():  # Check if the key matches
+            encrypted_text = encrypt(text)
+            snippets[snippet_id] = (encrypted_text, KEY.decode())
+        else:
+            snippets[snippet_id] = (text, None)  # Store plain text with no key
+
+        snippet_url = url_for('view_snippet', snippet_id=snippet_id)
+        return f'<h1>Snippet Created!</h1><p>Your shareable URL is: <a href="{snippet_url}">{snippet_url}</a></p>'
+
+    return render_template('create_snippet.html')
+
+@app.route('/view_snippet/<snippet_id>', methods=['GET', 'POST'])
+def view_snippet(snippet_id):
+    snippet = snippets.get(snippet_id)
+    if not snippet:
+        return 'Snippet not found', 404
+
+    text, key = snippet
+
+    if request.method == 'POST':
+        user_key = request.form.get('key', '')
+        if key and user_key == key:
+            try:
+                text = decrypt(text, key)
+                return render_template('decrypt_snippet.html', decrypted_text=text)
+            except:
+                return 'Error decrypting the text', 500
+        elif key:
+            return 'Invalid secret key', 403
+
+    if key:
+        # Render form to enter the decryption key
+        return render_template('decrypt_snippet.html')
+    return f'<pre>{text}</pre>'
 
 if __name__ == '__main__':
     app.run(debug=True)
